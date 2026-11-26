@@ -44,7 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ===== GEMINI AI =====
   async function callGemini(prompt) {
 
-    const model = "gemini-3.6-flash";
+    const model = "gemini-3.5-flash-lite";
     
     const url =
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
