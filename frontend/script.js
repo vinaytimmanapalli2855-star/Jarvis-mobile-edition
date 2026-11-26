@@ -29,6 +29,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
     API_KEY = API_KEY.trim();
     localStorage.setItem('jarvis_key', API_KEY);
+    // ===== CHANGE API KEY BUTTON =====
+const keyBtn = document.createElement('button');
+keyBtn.innerText = '🔑 CHANGE API KEY';
+keyBtn.id = 'change-key-btn';
+
+keyBtn.style.cssText = `
+  display:block;
+  margin:10px auto;
+  padding:12px 18px;
+  color:#ffd700;
+  background:#080808;
+  border:1px solid #ffd700;
+  border-radius:8px;
+  font-weight:bold;
+  cursor:pointer;
+`;
+
+document.body.appendChild(keyBtn);
+
+keyBtn.onclick = () => {
+  const newKey = prompt('Enter your new Gemini API Key:');
+
+  if (!newKey || !newKey.trim()) return;
+
+  API_KEY = newKey.trim();
+  localStorage.setItem('jarvis_key', API_KEY);
+
+  alert('JARVIS: API KEY UPDATED SUCCESSFULLY');
+};
   }
 
   // ===== CHAT MESSAGE =====
