@@ -1,430 +1,183 @@
 
-// ==========================================
-//       J.A.R.V.I.S MOBILE EDITION
-//            COMPLETE AI ENGINE
-// ==========================================
+/* ==========================================
+       J.A.R.V.I.S MOBILE EDITION
+          COMPLETE AI ENGINE
+========================================== */
 
-// 1. API KEY
-let API_KEY = localStorage.getItem("jarvis_key");
+// 1. CONFIGURATION
+const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+
+const MODELS = [
+  "gemini-3.8-flash",
+  "gemini-3.5-flash-lite"
+];
+
+let API_KEY = localStorage.getItem("jarvis_key") || "";
 
 if (!API_KEY) {
   API_KEY = prompt("Enter your Gemini API Key:");
-
-  if (API_KEY && API_KEY.trim()) {
+  if (API_KEY) {
     API_KEY = API_KEY.trim();
     localStorage.setItem("jarvis_key", API_KEY);
-  } else {
-    API_KEY = "";
   }
 }
 
-const API_URL =
-  "https://generativelanguage.googleapis.com/v1beta";
-
-// 2. HTML ELEMENTS
-const chat = document.getElementById("chat");
-const msg = document.getElementById("msg");
-const sendBtn = document.getElementById("send");
-const micBtn = document.getElementById("mic-btn");
-const clearBtn = document.getElementById("clear-btn");
-const camBtn = document.getElementById("cam-btn");
-const imgInput = document.getElementById("img-input");
-
-if (
-  !chat || !msg || !sendBtn ||
-  !micBtn || !clearBtn || !camBtn || !imgInput
-) {
-  console.error("JARVIS: Required HTML elements are missing.");
-}
-
-// 3. MEMORY
-let conversation = [];
+// 2. MEMORY
+let history = [];
 
 try {
-  conversation = JSON.parse(
+  history = JSON.parse(
     localStorage.getItem("jarvis_memory") || "[]"
   );
 
-  if (!Array.isArray(conversation)) {
-    conversation = [];
-  }
+  if (!Array.isArray(history)) history = [];
 } catch {
-  conversation = [];
+  history = [];
 }
 
-let availableModels = [];
-let selectedModel = null;
-let busy = false;
+history = history.filter(
+  m => ["user", "model"].includes(m.role) &&
+       Array.isArray(m.parts)
+).slice(-12);
 
-// 4. SYSTEM STATUS
-function setStatus(index, online, label) {
-  const rows = document.querySelectorAll(".status .row b");
-
-  if (!rows[index]) return;
-
-  rows[index].className = online ? "on" : "off";
-  rows[index].textContent = online
-    ? "● " + label
-    : "○ " + label;
-}
-
-setStatus(0, true, "ONLINE");
-setStatus(1, navigator.onLine, "ONLINE");
-setStatus(2, "speechSynthesis" in window, "VOICE");
-setStatus(3, true, "MEMORY");
-
-// 5. CHAT DISPLAY
-function addMessage(sender, text) {
-  const item = document.createElement("div");
-  item.className = "msg " + sender;
-
-  const title = document.createElement("b");
-  title.textContent =
-    sender === "user" ? "YOU: " : "JARVIS: ";
-
-  const content = document.createElement("span");
-  content.textContent = text;
-
-  item.appendChild(title);
-  item.appendChild(content);
-
-  chat.appendChild(item);
-  chat.scrollTop = chat.scrollHeight;
-}
-
-// 6. SAVE MEMORY
 function saveMemory() {
+  localStorage.setItem(
+    "jarvis_memory",
+    JSON.stringify(history.slice(-12))
+  );
+}
+
+// 3. MODEL DISCOVERY
+let activeModel = null;
+
+async function discoverModels() {
   try {
-    localStorage.setItem(
-      "jarvis_memory",
-      JSON.stringify(conversation.slice(-20))
+    const response = await fetch(
+      `${API_BASE}/models?key=${encodeURIComponent(API_KEY)}`
     );
-  } catch (error) {
-    console.error("Memory error:", error);
-  }
-}
 
-function remember(role, text) {
-  conversation.push({
-    role: role,
-    parts: [{ text: text }]
-  });
+    if (!response.ok) {
+      throw new Error("API key or model access error");
+    }
 
-  conversation = conversation.slice(-20);
-  saveMemory();
-}
+    const data = await response.json();
 
-// 7. FIND AVAILABLE GEMINI MODELS
-async function loadModels() {
-  if (!API_KEY) {
-    throw new Error("Gemini API key is missing.");
-  }
-
-  const response = await fetch(
-    `${API_URL}/models?key=${encodeURIComponent(API_KEY)}`
-  );
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(
-      data.error?.message || "Unable to load Gemini models."
-    );
-  }
-
-  const models = (data.models || [])
-    .filter(model =>
-      model.supportedGenerationMethods?.includes(
-        "generateContent"
+    const available = (data.models || [])
+      .filter(m =>
+        (m.supportedGenerationMethods || [])
+          .includes("generateContent")
       )
-    )
-    .map(model => model.name.replace("models/", ""));
+      .map(m => m.name.replace("models/", ""));
 
-  // Exclude the retired model causing your error.
-  const usableModels = models.filter(model =>
-    !model.includes("gemini-2.5-pro")
-  );
+    activeModel =
+      MODELS.find(m => available.includes(m)) ||
+      available.find(m => m.includes("flash")) ||
+      null;
 
-  // Prefer Flash models for speed.
-  const flashModels = usableModels.filter(model =>
-    model.toLowerCase().includes("flash")
-  );
+    if (!activeModel) {
+      throw new Error("No compatible Gemini Flash model found");
+    }
 
-  availableModels = [
-    ...flashModels,
-    ...usableModels.filter(model =>
-      !flashModels.includes(model)
-    )
-  ];
+    console.log("JARVIS model:", activeModel);
+    setStatus("AI", "ONLINE");
 
-  if (!availableModels.length) {
-    throw new Error(
-      "No usable Gemini models found. Check your API key and model access."
-    );
+    return activeModel;
+
+  } catch (error) {
+    console.error("Model discovery:", error);
+    setStatus("AI", "ERROR");
+    throw error;
   }
-
-  selectedModel = availableModels[0];
-
-  console.log("JARVIS available models:", availableModels);
-  console.log("JARVIS selected model:", selectedModel);
 }
 
-// 8. CLEAN CHAT HISTORY
-function getCleanHistory() {
-  return conversation
-    .filter(item =>
-      item &&
-      (item.role === "user" || item.role === "model") &&
-      Array.isArray(item.parts)
-    )
-    .map(item => ({
-      role: item.role,
-      parts: item.parts
-        .filter(part =>
-          part && typeof part.text === "string"
-        )
-        .map(part => ({
-          text: part.text
-        }))
-    }))
-    .filter(item => item.parts.length > 0)
-    .slice(-12);
-}
-
-// 9. GEMINI AI ENGINE
-async function askGemini(text, imageData = null) {
-  if (!availableModels.length) {
-    await loadModels();
+// 4. UI ELEMENTS
+const $ = (...selectors) => {
+  for (const selector of selectors) {
+    const element = document.querySelector(selector);
+    if (element) return element;
   }
+  return null;
+};
 
-  const parts = [{ text: text }];
+const chatBox = $(
+  "#chatBox", "#chat-box", "#messages",
+  ".chat-box", ".chat-messages"
+);
 
-  if (imageData) {
-    parts.push({
-      inlineData: {
-        mimeType: imageData.mimeType,
-        data: imageData.data
-      }
-    });
-  }
+const input = $(
+  "#userInput", "#user-input", "#messageInput",
+  "#message", "textarea", "input[type='text']"
+);
 
-  const history = getCleanHistory();
+const sendButton = $(
+  "#sendBtn", "#send-btn", "#sendButton",
+  ".send-btn", "button[type='submit']"
+);
 
-  const contents = [
-    ...history,
-    {
-      role: "user",
-      parts: parts
-    }
-  ];
+const micButton = $(
+  "#micBtn", "#mic-btn", "#micButton"
+);
 
-  const body = {
-    systemInstruction: {
-      parts: [{
-        text:
-          "You are J.A.R.V.I.S, a helpful and intelligent AI assistant. " +
-          "Be friendly, smart, clear and concise. " +
-          "Help with questions, explanations, calculations and planning. " +
-          "Never claim to control a device or perform an action you cannot perform."
-      }]
-    },
+const cameraButton = $(
+  "#cameraBtn", "#camera-btn", "#cameraButton"
+);
 
-    contents: contents,
+const clearButton = $(
+  "#clearBtn", "#clear-btn", "#clearButton"
+);
 
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 2048
-    }
-  };
+// 5. SYSTEM STATUS
+function setStatus(name, value) {
+  console.log(name + ": " + value);
 
-  let lastError = "No Gemini model responded.";
+  const rows = document.querySelectorAll(
+    ".status-row, .status-item"
+  );
 
-  // Try available models one by one.
-  for (const model of availableModels) {
-    try {
-      const response = await fetch(
-        `${API_URL}/models/${model}:generateContent?key=${encodeURIComponent(API_KEY)}`,
-        {
-          method: "POST",
-
-          headers: {
-            "Content-Type": "application/json"
-          },
-
-          body: JSON.stringify(body)
-        }
+  rows.forEach(row => {
+    if (row.textContent.toUpperCase().includes(name)) {
+      const status = row.querySelector(
+        ".status-value, .status-text"
       );
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        lastError =
-          data.error?.message || "Gemini request failed.";
-
-        console.warn("Model failed:", model, lastError);
-        continue;
-      }
-
-      const answer = data.candidates?.[0]?.content?.parts
-        ?.map(part => part.text || "")
-        .join("")
-        .trim();
-
-      if (answer) {
-        selectedModel = model;
-        return answer;
-      }
-
-      lastError = "Gemini returned an empty response.";
-
-    } catch (error) {
-      lastError = error.message;
+      if (status) status.textContent = value;
     }
-  }
-
-  throw new Error(lastError);
+  });
 }
 
-// 10. SPECIAL COMMANDS
-async function handleCommand(text) {
-  const command = text.toLowerCase().trim();
-
-  if (
-    command === "youtube" ||
-    command.startsWith("open youtube")
-  ) {
-    window.open("https://www.youtube.com", "_blank");
-    return "Opening YouTube.";
-  }
-
-  if (
-    command === "google" ||
-    command.startsWith("open google")
-  ) {
-    window.open("https://www.google.com", "_blank");
-    return "Opening Google.";
-  }
-
-  if (command.startsWith("search ")) {
-    const query = text.substring(7).trim();
-
-    window.open(
-      "https://www.google.com/search?q=" +
-      encodeURIComponent(query),
-      "_blank"
-    );
-
-    return "Searching Google for " + query;
-  }
-
-  if (command.startsWith("play ")) {
-    const query = text.substring(5).trim();
-
-    window.open(
-      "https://www.youtube.com/results?search_query=" +
-      encodeURIComponent(query),
-      "_blank"
-    );
-
-    return "Searching YouTube for " + query;
-  }
-
-  if (command === "clear chat" || command === "forget memory") {
-    conversation = [];
-    saveMemory();
-    chat.innerHTML = "";
-
-    return "Conversation memory cleared.";
-  }
-
-  if (command === "change api key") {
-    const key = prompt("Enter your new Gemini API key:");
-
-    if (key && key.trim()) {
-      API_KEY = key.trim();
-
-      localStorage.setItem("jarvis_key", API_KEY);
-
-      availableModels = [];
-      selectedModel = null;
-
-      return "API key updated. Reconnecting to Gemini.";
-    }
-
-    return "API key was not changed.";
-  }
-
-  if (command === "what time is it") {
-    return "The current time is " +
-      new Date().toLocaleTimeString();
-  }
-
-  if (
-    command === "what is today's date" ||
-    command === "what is the date"
-  ) {
-    return "Today's date is " +
-      new Date().toLocaleDateString();
-  }
-
-  return null;
-}
-
-// 11. SEND MESSAGE
-async function sendMessage() {
-  const text = msg.value.trim();
-
-  if (!text || busy) return;
-
-  if (!API_KEY) {
-    addMessage(
-      "jarvis",
-      "Please enter your Gemini API key."
-    );
+// 6. CHAT DISPLAY
+function addMessage(sender, message) {
+  if (!chatBox) {
+    console.error("Chat container not found");
     return;
   }
 
-  msg.value = "";
+  const wrapper = document.createElement("div");
 
-  addMessage("user", text);
+  wrapper.style.cssText = `
+    padding:10px;
+    margin:8px 0;
+    border-left:3px solid #00ffff;
+    background:rgba(0,255,255,0.06);
+    color:#70ffff;
+    white-space:pre-wrap;
+    overflow-wrap:anywhere;
+    font-family:inherit;
+  `;
 
-  busy = true;
-  sendBtn.disabled = true;
-  sendBtn.textContent = "...";
+  const heading = document.createElement("strong");
+  heading.textContent = sender + ": ";
 
-  try {
-    const commandResult = await handleCommand(text);
+  const content = document.createElement("span");
+  content.textContent = message;
 
-    if (commandResult !== null) {
-      addMessage("jarvis", commandResult);
-      speak(commandResult);
+  wrapper.append(heading, content);
+  chatBox.appendChild(wrapper);
 
-    } else {
-      const answer = await askGemini(text);
-
-      remember("user", text);
-      remember("model", answer);
-
-      addMessage("jarvis", answer);
-      speak(answer);
-    }
-
-  } catch (error) {
-    console.error("JARVIS ERROR:", error);
-
-    addMessage(
-      "jarvis",
-      "ERROR: " + error.message
-    );
-
-  } finally {
-    busy = false;
-    sendBtn.disabled = false;
-    sendBtn.textContent = "SEND";
-  }
+  chatBox.scrollTop = chatBox.scrollHeight;
 }
 
-// 12. VOICE OUTPUT
+// 7. VOICE OUTPUT
 function speak(text) {
   if (!("speechSynthesis" in window)) return;
 
@@ -432,201 +185,397 @@ function speak(text) {
 
   const speech = new SpeechSynthesisUtterance(text);
 
-  speech.lang = "en-US";
+  speech.lang = "en-IN";
   speech.rate = 1;
-  speech.pitch = 1;
+  speech.pitch = 0.9;
+  speech.volume = 1;
 
   window.speechSynthesis.speak(speech);
 }
 
-// 13. VOICE INPUT
-let recognition = null;
+// 8. GEMINI API
+async function askGemini(prompt, imageData = null) {
+  if (!API_KEY) {
+    throw new Error("Gemini API key is missing");
+  }
 
+  if (!activeModel) {
+    await discoverModels();
+  }
+
+  const parts = [{ text: prompt }];
+
+  if (imageData) {
+    parts.push({
+      inline_data: {
+        mime_type: imageData.type,
+        data: imageData.data
+      }
+    });
+  }
+
+  const contents = [
+    ...history,
+    {
+      role: "user",
+      parts
+    }
+  ];
+
+  const modelsToTry = [
+    activeModel,
+    ...MODELS.filter(m => m !== activeModel)
+  ];
+
+  let lastError;
+
+  for (const model of modelsToTry) {
+    try {
+      const response = await fetch(
+        `${API_BASE}/models/${model}:generateContent?key=${encodeURIComponent(API_KEY)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            system_instruction: {
+              parts: [{
+                text: `You are J.A.R.V.I.S., an intelligent mobile AI assistant.
+You are helpful, professional, friendly and concise.
+Your name is JARVIS.
+Respond naturally and clearly.
+You can analyze images when provided.
+Never claim to perform actions you cannot actually perform.`
+              }]
+            },
+            contents,
+            generationConfig: {
+              temperature: 0.7,
+              maxOutputTokens: 2048
+            }
+          })
+        }
+      );
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          result.error?.message || `HTTP ${response.status}`
+        );
+      }
+
+      const answer =
+        result.candidates?.[0]?.content?.parts
+          ?.map(p => p.text || "")
+          .join("")
+          .trim();
+
+      if (!answer) {
+        throw new Error("Gemini returned an empty response");
+      }
+
+      activeModel = model;
+
+      history.push(
+        { role: "user", parts },
+        { role: "model", parts: [{ text: answer }] }
+      );
+
+      history = history.slice(-12);
+      saveMemory();
+
+      return answer;
+
+    } catch (error) {
+      console.error(model, error);
+      lastError = error;
+
+      // Don't retry authentication or permission errors.
+      if (/API_KEY_INVALID|PERMISSION_DENIED|API key/i.test(error.message)) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || new Error("All Gemini models failed");
+}
+
+// 9. COMMAND SYSTEM
+function handleCommand(text) {
+  const command = text.toLowerCase().trim();
+
+  if (command === "clear memory") {
+    history = [];
+    saveMemory();
+    addMessage("JARVIS", "Memory cleared successfully.");
+    return true;
+  }
+
+  if (command === "change api key") {
+    const newKey = prompt("Enter your new Gemini API key:");
+
+    if (newKey && newKey.trim()) {
+      API_KEY = newKey.trim();
+      localStorage.setItem("jarvis_key", API_KEY);
+      activeModel = null;
+      addMessage("JARVIS", "API key updated.");
+    }
+
+    return true;
+  }
+
+  if (command.startsWith("google ")) {
+    window.open(
+      "https://www.google.com/search?q=" +
+      encodeURIComponent(text.slice(7)),
+      "_blank"
+    );
+    addMessage("JARVIS", "Opening Google search.");
+    return true;
+  }
+
+  if (command.startsWith("youtube ")) {
+    window.open(
+      "https://www.youtube.com/results?search_query=" +
+      encodeURIComponent(text.slice(8)),
+      "_blank"
+    );
+    addMessage("JARVIS", "Opening YouTube.");
+    return true;
+  }
+
+  if (command === "time" || command === "what time is it") {
+    const answer = new Date().toLocaleTimeString();
+    addMessage("JARVIS", "Current time: " + answer);
+    speak("The current time is " + answer);
+    return true;
+  }
+
+  if (command === "date" || command === "today's date") {
+    const answer = new Date().toLocaleDateString();
+    addMessage("JARVIS", "Today's date: " + answer);
+    speak("Today's date is " + answer);
+    return true;
+  }
+
+  return false;
+}
+
+// 10. SEND MESSAGE
+let busy = false;
+
+async function sendMessage(customText = null, imageData = null) {
+  if (busy) return;
+
+  const message = (
+    customText !== null ? customText : input?.value
+  )?.trim();
+
+  if (!message && !imageData) return;
+
+  if (!API_KEY) {
+    addMessage("JARVIS", "Please enter your Gemini API key.");
+    return;
+  }
+
+  if (!imageData && handleCommand(message)) {
+    if (input && customText === null) input.value = "";
+    return;
+  }
+
+  if (input && customText === null) input.value = "";
+
+  addMessage("YOU", message || "Analyze this image.");
+
+  busy = true;
+  if (sendButton) sendButton.disabled = true;
+
+  setStatus("AI", "PROCESSING");
+
+  try {
+    const answer = await askGemini(message || "Describe this image.", imageData);
+
+    addMessage("JARVIS", answer);
+    speak(answer);
+
+    setStatus("AI", "ONLINE");
+
+  } catch (error) {
+    console.error("JARVIS ERROR:", error);
+
+    addMessage(
+      "JARVIS",
+      "ERROR: " + error.message
+    );
+
+    setStatus("AI", "ERROR");
+
+  } finally {
+    busy = false;
+    if (sendButton) sendButton.disabled = false;
+  }
+}
+
+// 11. SEND BUTTON
+if (sendButton) {
+  sendButton.addEventListener("click", () => sendMessage());
+}
+
+if (input) {
+  input.addEventListener("keydown", event => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      sendMessage();
+    }
+  });
+}
+
+// 12. MICROPHONE
 const SpeechRecognition =
   window.SpeechRecognition ||
   window.webkitSpeechRecognition;
 
-if (SpeechRecognition) {
-  recognition = new SpeechRecognition();
+if (micButton) {
+  micButton.addEventListener("click", () => {
+    if (!SpeechRecognition) {
+      addMessage("JARVIS", "Speech recognition is not supported in this browser.");
+      return;
+    }
 
-  recognition.lang = "en-US";
-  recognition.continuous = false;
-  recognition.interimResults = false;
+    const recognition = new SpeechRecognition();
 
-  recognition.onstart = () => {
-    micBtn.textContent = "🔴";
-  };
+    recognition.lang = "en-IN";
+    recognition.continuous = false;
+    recognition.interimResults = false;
 
-  recognition.onend = () => {
-    micBtn.textContent = "🎤";
-  };
+    recognition.onstart = () => {
+      addMessage("JARVIS", "Listening...");
+      setStatus("VOICE", "LISTENING");
+    };
 
-  recognition.onresult = event => {
-    msg.value = event.results[0][0].transcript;
-    sendMessage();
-  };
+    recognition.onresult = event => {
+      const spokenText =
+        event.results[0][0].transcript;
 
-  recognition.onerror = event => {
-    addMessage(
-      "jarvis",
-      "Voice error: " + event.error
-    );
-  };
+      if (input) input.value = spokenText;
+      sendMessage(spokenText);
+    };
+
+    recognition.onerror = event => {
+      addMessage("JARVIS", "Voice error: " + event.error);
+    };
+
+    recognition.onend = () => {
+      setStatus("VOICE", "READY");
+    };
+
+    recognition.start();
+  });
 }
 
-micBtn.addEventListener("click", () => {
-  if (!recognition) {
-    addMessage(
-      "jarvis",
-      "Voice recognition is not supported in this browser."
-    );
-    return;
-  }
+// 13. CAMERA / IMAGE ANALYSIS
+const imageInput = document.createElement("input");
 
-  try {
-    recognition.start();
-  } catch (error) {
-    console.log(error);
-  }
-});
+imageInput.type = "file";
+imageInput.accept = "image/*";
+imageInput.capture = "environment";
+imageInput.hidden = true;
 
-// 14. CAMERA AND IMAGE ANALYSIS
-camBtn.addEventListener("click", () => {
-  imgInput.click();
-});
+document.body.appendChild(imageInput);
 
-imgInput.addEventListener("change", () => {
-  const file = imgInput.files?.[0];
+if (cameraButton) {
+  cameraButton.addEventListener("click", () => {
+    imageInput.click();
+  });
+}
+
+imageInput.addEventListener("change", async () => {
+  const file = imageInput.files?.[0];
 
   if (!file) return;
 
   if (!file.type.startsWith("image/")) {
-    addMessage("jarvis", "Please select an image.");
-    imgInput.value = "";
+    addMessage("JARVIS", "Please select an image.");
     return;
   }
 
-  if (file.size > 4 * 1024 * 1024) {
+  try {
+    const data = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+
+      reader.onload = () => {
+        const base64 = reader.result.split(",")[1];
+
+        resolve({
+          type: file.type,
+          data: base64
+        });
+      };
+
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+    await sendMessage("Analyze this image and describe what you see.", data);
+
+  } catch (error) {
+    addMessage("JARVIS", "Image error: " + error.message);
+  }
+
+  imageInput.value = "";
+});
+
+// 14. CLEAR MEMORY BUTTON
+if (clearButton) {
+  clearButton.addEventListener("click", () => {
+    if (confirm("Clear all JARVIS conversation memory?")) {
+      history = [];
+      saveMemory();
+
+      if (chatBox) chatBox.innerHTML = "";
+
+      addMessage("JARVIS", "Memory cleared.");
+    }
+  });
+}
+
+// 15. INITIALIZATION
+async function initializeJarvis() {
+  addMessage("JARVIS", "J.A.R.V.I.S. SYSTEM INITIALIZING...");
+
+  setStatus("NETWORK", navigator.onLine ? "ONLINE" : "OFFLINE");
+  setStatus("VOICE", SpeechRecognition ? "READY" : "UNAVAILABLE");
+  setStatus("MEMORY", "ACTIVE");
+
+  window.addEventListener("online", () => {
+    setStatus("NETWORK", "ONLINE");
+  });
+
+  window.addEventListener("offline", () => {
+    setStatus("NETWORK", "OFFLINE");
+  });
+
+  if (!API_KEY) {
+    addMessage("JARVIS", "API key missing. Reload and enter your Gemini API key.");
+    return;
+  }
+
+  try {
+    await discoverModels();
+
     addMessage(
-      "jarvis",
-      "Please choose an image smaller than 4 MB."
+      "JARVIS",
+      "All systems initialized. " +
+      "Model: " + activeModel +
+      ". At your service."
     );
 
-    imgInput.value = "";
-    return;
+  } catch (error) {
+    addMessage("JARVIS", "INITIALIZATION ERROR: " + error.message);
   }
-
-  const reader = new FileReader();
-
-  reader.onload = async () => {
-    const base64 = String(reader.result).split(",")[1];
-
-    if (!base64) {
-      addMessage("jarvis", "Unable to read this image.");
-      imgInput.value = "";
-      return;
-    }
-
-    if (busy) {
-      imgInput.value = "";
-      return;
-    }
-
-    addMessage("user", "📷 Image sent for analysis.");
-
-    busy = true;
-    sendBtn.disabled = true;
-    sendBtn.textContent = "...";
-
-    try {
-      const answer = await askGemini(
-        "Please analyze this image and describe what you see.",
-        {
-          mimeType: file.type,
-          data: base64
-        }
-      );
-
-      remember("user", "Analyze the image I uploaded.");
-      remember("model", answer);
-
-      addMessage("jarvis", answer);
-      speak(answer);
-
-    } catch (error) {
-      addMessage(
-        "jarvis",
-        "IMAGE ERROR: " + error.message
-      );
-
-    } finally {
-      busy = false;
-      sendBtn.disabled = false;
-      sendBtn.textContent = "SEND";
-      imgInput.value = "";
-    }
-  };
-
-  reader.onerror = () => {
-    addMessage("jarvis", "Unable to read the image.");
-    imgInput.value = "";
-  };
-
-  reader.readAsDataURL(file);
-});
-
-// 15. CLEAR MEMORY BUTTON
-clearBtn.addEventListener("click", () => {
-  if (!confirm("Clear all saved chat memory?")) return;
-
-  conversation = [];
-  saveMemory();
-
-  chat.innerHTML = "";
-
-  addMessage(
-    "jarvis",
-    "Memory cleared. Ready for a new conversation."
-  );
-});
-
-// 16. BUTTON EVENTS
-sendBtn.addEventListener("click", sendMessage);
-
-msg.addEventListener("keydown", event => {
-  if (event.key === "Enter") {
-    sendMessage();
-  }
-});
-
-// 17. INTERNET STATUS
-window.addEventListener("online", () => {
-  setStatus(1, true, "ONLINE");
-});
-
-window.addEventListener("offline", () => {
-  setStatus(1, false, "OFFLINE");
-});
-
-// 18. START JARVIS
-addMessage(
-  "jarvis",
-  "J.A.R.V.I.S online. Initializing AI systems..."
-);
-
-if (API_KEY) {
-  loadModels()
-    .then(() => {
-      addMessage(
-        "jarvis",
-        "AI connection established. Selected model: " +
-        selectedModel
-      );
-    })
-    .catch(error => {
-      addMessage(
-        "jarvis",
-        "CONNECTION ERROR: " + error.message
-      );
-    });
 }
+
+initializeJarvis();
+  
