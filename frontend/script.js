@@ -11,8 +11,8 @@ if (!API_KEY) {
 
 // Use model IDs available to your Gemini API key.
 const MODELS = [
-  "gemini-2.5-flash",
-  "gemini-2.5-flash-lite"
+  "gemini-3.5-flash-lite",
+  "gemini-3.5-flash"
 ];
 
 // 2. ELEMENTS
