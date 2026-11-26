@@ -1,18 +1,16 @@
-<div class="controls">
+<div class="controls" style="display:flex; flex-wrap:wrap; gap:10px; justify-content:center; width:100%;">
 
-  <input id="msg" type="text" placeholder="ENTER COMMAND...">
+  <input id="msg" type="text" placeholder="ENTER COMMAND..."
+  style="flex:1; min-width:180px; padding:12px; background:#111; color:white; border:1px solid red;">
 
-  <button id="send">SEND</button>
-  <button id="mic-btn">🎤</button>
-  <button id="clear-btn">🧹</button>
-  <button id="cam-btn">📷</button>
+  <button id="send" style="display:block; background:red; color:white; padding:12px;">SEND</button>
 
-  <input
-    type="file"
-    id="img-input"
-    accept="image/*"
-    capture="environment"
-    style="display:none"
-  >
+  <button id="mic-btn" style="display:block; background:#222; color:white; padding:12px;">🎤</button>
+
+  <button id="clear-btn" style="display:block; background:#222; color:white; padding:12px;">🧹</button>
+
+  <button id="cam-btn" style="display:block; background:#222; color:white; padding:12px;">📷</button>
+
+  <input type="file" id="img-input" accept="image/*" capture="environment" style="display:none">
 
 </div>
