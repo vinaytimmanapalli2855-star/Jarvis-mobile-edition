@@ -1,3 +1,8 @@
+// --- GLOBAL ERROR CATCHER ---
+window.onerror = function(message, source, lineno, colno, error) {
+  alert("CODE CRASHED: " + message + " at line " + lineno);
+};
+
 // ===== 1. API KEY =====
 let API_KEY = localStorage.getItem('jarvis_key');
 if(!API_KEY){
@@ -10,20 +15,15 @@ const chat = document.getElementById('chat');
 const input = document.getElementById('msg');
 const micBtn = document.getElementById('mic-btn');
 
-// ===== 3. GEMINI BRAIN (REAL-TIME STREAMING) =====
+// ===== 3. GEMINI BRAIN =====
 async function callGemini(p){
-  // Using the ultra-fast 8b model
-  const m = "gemini-1.5-flash-8b"; 
+  const m = "gemini-1.5-flash"; // Switched to standard flash just to be safe
   const url = "https://generativelanguage.googleapis.com/v1beta/models/"+m+":streamGenerateContent?alt=sse&key="+API_KEY;
   
   const res = await fetch(url, {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: p }] }],
-      // This makes J.A.R.V.I.S answer quickly and briefly
-      systemInstruction: { parts: [{ text: "You are J.A.R.V.I.S. Keep answers very short, smart, and under 2 sentences." }] }
-    })
+    body: JSON.stringify({ contents: [{ parts: [{ text: p }] }] })
   });
 
   if(!res.ok) {
@@ -49,7 +49,6 @@ async function callGemini(p){
           if (data.candidates && data.candidates[0].content) {
             const text = data.candidates[0].content.parts[0].text;
             fullText += text;
-            // Types out in real-time!
             chat.lastChild.innerText = 'J.A.R.V.I.S: ' + fullText;
             chat.scrollTop = chat.scrollHeight;
           }
@@ -61,13 +60,14 @@ async function callGemini(p){
 }
 
 async function askGemini(p){
+  // alert("Check 1: askGemini started!"); // Uncomment this if you still get nothing
   add('J.A.R.V.I.S: Thinking...','ai');
   try{
-    // callGemini now types the text automatically
     const reply = await callGemini(p);
-    speak(reply); // Speaks the full reply when done
+    speak(reply);
   }catch(e){
-    chat.lastChild.innerText='J.A.R.V.I.S: ERROR - '+e.message;
+    alert("API ERROR: " + e.message); 
+    chat.lastChild.innerText='J.A.R.V.I.S: ERROR - ' + e.message;
   }
 }
 
@@ -81,8 +81,10 @@ if (SR) {
     add('YOU: '+t,'user');
     askGemini(t);
   };
-  micBtn.onclick = () => { rec.start(); micBtn.innerText='LISTENING...'; };
-  rec.onend = () => { micBtn.innerText='🎤'; };
+  if (micBtn) {
+    micBtn.onclick = () => { rec.start(); micBtn.innerText='LISTENING...'; };
+    rec.onend = () => { micBtn.innerText='🎤'; };
+  }
 }
 
 // ===== 5. TEXT-TO-SPEECH =====
@@ -100,12 +102,16 @@ function speak(t){
 }
 
 // ===== 6. TEXT SEND BUTTON =====
-document.getElementById('send').onclick = () => {
-  const t = input.value.trim(); 
-  if(!t) return;
-  add('YOU: '+t, 'user'); 
-  input.value = ''; 
-  askGemini(t);
+document.getElementById('send').onclick = async () => {
+  try {
+    const t = input.value.trim(); 
+    if(!t) return;
+    add('YOU: '+t, 'user'); 
+    input.value = ''; 
+    await askGemini(t);
+  } catch (err) {
+    alert("BUTTON CRASH: " + err.message);
+  }
 };
 
 function add(t, w){
