@@ -292,3 +292,4 @@ if (camBtn && imgInput) {
 }
 
 add('J.A.R.V.I.S SYSTEM READY.', 'ai');
+
