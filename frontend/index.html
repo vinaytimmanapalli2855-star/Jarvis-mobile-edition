@@ -25,12 +25,17 @@
   </div>
 
   <div class="chat" id="chat"></div>
-  <div class="input-area">
-  <input id="msg" placeholder="Ask J.A.R.V.I.S...">
-  <button id="mic-btn">🎤</button> <!-- ADD THIS LINE -->
-  <button id="send">SEND</button>
-  </div>
+  
+<div class="controls">
+  <input id="msg" type="text" placeholder="Ask J.A.R.V.I.S...">
 
-  <script src="script.js"></script>
-</body>
-</html>
+  <button id="send">SEND</button>
+  <button id="mic-btn">🎤</button>
+  <button id="clear-btn">🧹</button>
+  <button id="cam-btn">📷</button>
+
+  <input type="file" id="img-input"
+    accept="image/*"
+    capture="environment"
+    style="display:none">
+</div>
