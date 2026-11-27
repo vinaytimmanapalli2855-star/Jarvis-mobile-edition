@@ -287,20 +287,37 @@ function addMessage(sender, message) {
   chatBox.scrollTop = chatBox.scrollHeight;
 }
 
-// 7. VOICE OUTPUT
+
+// 7. VOICE OUTPUT - ANDROID NATIVE + WEB FALLBACK
 function speak(text) {
-  if (!("speechSynthesis" in window)) return;
+  if (!text) return;
 
-  window.speechSynthesis.cancel();
+  // Use native Android Text-to-Speech inside the APK.
+  if (
+    window.AndroidJarvis &&
+    typeof window.AndroidJarvis.speak === "function"
+  ) {
+    try {
+      window.AndroidJarvis.speak(String(text));
+      return;
+    } catch (error) {
+      console.error("Android voice error:", error);
+    }
+  }
 
-  const speech = new SpeechSynthesisUtterance(text);
+  // Browser fallback when running outside the Android APK.
+  if ("speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
 
-  speech.lang = "en-IN";
-  speech.rate = 1;
-  speech.pitch = 0.9;
-  speech.volume = 1;
+    const speech = new SpeechSynthesisUtterance(String(text));
 
-  window.speechSynthesis.speak(speech);
+    speech.lang = "en-IN";
+    speech.rate = 1;
+    speech.pitch = 0.9;
+    speech.volume = 1;
+
+    window.speechSynthesis.speak(speech);
+  }
 }
 
 // 8. GEMINI API
