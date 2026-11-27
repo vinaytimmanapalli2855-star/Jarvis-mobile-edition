@@ -1,23 +1,22 @@
 
 /* ==========================================
        J.A.R.V.I.S MOBILE EDITION
-          COMPLETE AI ENGINE
+          OPTIMIZED AI ENGINE
 ========================================== */
 
 // 1. CONFIGURATION
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
-
-const MODELS = [
-  "gemini-3.8-flash",
-  "gemini-3.5-flash-lite"
-];
+const CACHE_KEY = "jarvis_flash_models";
+const CACHE_TIME = 6 * 60 * 60 * 1000; // 6 hours
+const MAX_MODELS_TO_TRY = 3;
 
 let API_KEY = localStorage.getItem("jarvis_key") || "";
 
 if (!API_KEY) {
-  API_KEY = prompt("Enter your Gemini API Key:");
+  API_KEY = prompt("Enter your Gemini API Key:") || "";
+  API_KEY = API_KEY.trim();
+
   if (API_KEY) {
-    API_KEY = API_KEY.trim();
     localStorage.setItem("jarvis_key", API_KEY);
   }
 }
@@ -35,59 +34,163 @@ try {
   history = [];
 }
 
-history = history.filter(
-  m => ["user", "model"].includes(m.role) &&
-       Array.isArray(m.parts)
-).slice(-12);
+// Keep only text history.
+// Old saved image data is discarded to reduce storage and lag.
+history = history
+  .filter(m =>
+    ["user", "model"].includes(m.role) &&
+    Array.isArray(m.parts)
+  )
+  .map(m => ({
+    role: m.role,
+    parts: m.parts
+      .filter(p => typeof p.text === "string")
+      .map(p => ({ text: p.text }))
+  }))
+  .filter(m => m.parts.length)
+  .slice(-12);
 
 function saveMemory() {
-  localStorage.setItem(
-    "jarvis_memory",
-    JSON.stringify(history.slice(-12))
-  );
+  try {
+    localStorage.setItem(
+      "jarvis_memory",
+      JSON.stringify(history.slice(-12))
+    );
+  } catch (error) {
+    console.warn("Memory storage error:", error);
+  }
 }
 
 // 3. MODEL DISCOVERY
 let activeModel = null;
+let availableModels = [];
 
-async function discoverModels() {
+function rankModels(models) {
+  return models
+    .filter(name => {
+      const lower = name.toLowerCase();
+
+      return (
+        lower.includes("gemini") &&
+        lower.includes("flash") &&
+        !lower.includes("2.0") &&
+        !lower.includes("embedding") &&
+        !lower.includes("tts") &&
+        !lower.includes("image")
+      );
+    })
+    .sort((a, b) => {
+      // Prefer Flash Lite for speed.
+      const aLite = a.toLowerCase().includes("flash-lite");
+      const bLite = b.toLowerCase().includes("flash-lite");
+
+      if (aLite !== bLite) {
+        return aLite ? -1 : 1;
+      }
+
+      // Prefer newer numbered versions.
+      const getVersion = name => {
+        const match = name.match(/gemini-(\d+(?:\.\d+)?)/i);
+        return match ? parseFloat(match[1]) : 0;
+      };
+
+      return getVersion(b) - getVersion(a);
+    });
+}
+
+function getCachedModels() {
   try {
-    const response = await fetch(
-      `${API_BASE}/models?key=${encodeURIComponent(API_KEY)}`
+    const cached = JSON.parse(
+      localStorage.getItem(CACHE_KEY) || "null"
     );
 
-    if (!response.ok) {
-      throw new Error("API key or model access error");
+    if (
+      cached &&
+      Array.isArray(cached.models) &&
+      Date.now() - cached.time < CACHE_TIME
+    ) {
+      return cached.models;
     }
+  } catch {}
 
-    const data = await response.json();
+  return [];
+}
 
-    const available = (data.models || [])
-      .filter(m =>
-        (m.supportedGenerationMethods || [])
-          .includes("generateContent")
-      )
-      .map(m => m.name.replace("models/", ""));
+function cacheModels(models) {
+  try {
+    localStorage.setItem(
+      CACHE_KEY,
+      JSON.stringify({
+        models,
+        time: Date.now()
+      })
+    );
+  } catch {}
+}
 
-    activeModel =
-      MODELS.find(m => available.includes(m)) ||
-      available.find(m => m.includes("flash")) ||
-      null;
-
-    if (!activeModel) {
-      throw new Error("No compatible Gemini Flash model found");
-    }
-
-    console.log("JARVIS model:", activeModel);
-    setStatus("AI", "ONLINE");
-
-    return activeModel;
-
-  } catch (error) {
-    console.error("Model discovery:", error);
-    setStatus("AI", "ERROR");
-    throw error;
+async function discoverModels() {
+  if (availableModels.length) {
+    return availableModels;
   }
+
+  // Use cached models when available.
+  const cached = getCachedModels();
+
+  if (cached.length) {
+    availableModels = cached;
+    return availableModels;
+  }
+
+  if (!navigator.onLine) {
+    throw new Error("You are offline. Check your internet connection.");
+  }
+
+  let response;
+
+  try {
+    response = await fetch(
+      `${API_BASE}/models?key=${encodeURIComponent(API_KEY)}`,
+      {
+        signal: AbortSignal.timeout(15000)
+      }
+    );
+  } catch (error) {
+    throw new Error(
+      "Could not connect to Google. Check your internet connection and try again."
+    );
+  }
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      data.error?.message || `Model discovery failed: ${response.status}`
+    );
+  }
+
+  const supported = (data.models || [])
+    .filter(model =>
+      (model.supportedGenerationMethods || [])
+        .includes("generateContent")
+    )
+    .map(model => model.name.replace(/^models\//, ""));
+
+  availableModels = rankModels(supported).slice(
+    0,
+    MAX_MODELS_TO_TRY
+  );
+
+  if (!availableModels.length) {
+    throw new Error(
+      "No supported Gemini Flash model found. Check your API access."
+    );
+  }
+
+  cacheModels(availableModels);
+
+  console.log("Available JARVIS models:", availableModels);
+
+  return availableModels;
 }
 
 // 4. UI ELEMENTS
@@ -100,47 +203,63 @@ const $ = (...selectors) => {
 };
 
 const chatBox = $(
-  "#chatBox", "#chat-box", "#messages",
-  ".chat-box", ".chat-messages"
+  "#chat", "#chatBox", "#chat-box",
+  "#messages", ".chat-box", ".chat-messages"
 );
 
 const input = $(
-  "#userInput", "#user-input", "#messageInput",
-  "#message", "textarea", "input[type='text']"
+  "#msg", "#userInput", "#user-input",
+  "#messageInput", "#message",
+  "textarea", "input[type='text']"
 );
 
 const sendButton = $(
-  "#sendBtn", "#send-btn", "#sendButton",
-  ".send-btn", "button[type='submit']"
+  "#send", "#sendBtn", "#send-btn",
+  "#sendButton", ".send-btn"
 );
 
 const micButton = $(
-  "#micBtn", "#mic-btn", "#micButton"
+  "#mic-btn", "#micBtn", "#micButton"
 );
 
 const cameraButton = $(
-  "#cameraBtn", "#camera-btn", "#cameraButton"
+  "#cam-btn", "#cameraBtn",
+  "#camera-btn", "#cameraButton"
 );
 
 const clearButton = $(
-  "#clearBtn", "#clear-btn", "#clearButton"
+  "#clear-btn", "#clearBtn",
+  "#clear-button", "#clearButton"
+);
+
+const imageInput = $(
+  "#img-input", "#imageInput", "#image-input"
 );
 
 // 5. SYSTEM STATUS
 function setStatus(name, value) {
   console.log(name + ": " + value);
 
-  const rows = document.querySelectorAll(
-    ".status-row, .status-item"
-  );
+  document.querySelectorAll(".status .row").forEach(row => {
+    const label = row.querySelector("span");
 
-  rows.forEach(row => {
-    if (row.textContent.toUpperCase().includes(name)) {
-      const status = row.querySelector(
-        ".status-value, .status-text"
-      );
+    if (
+      label &&
+      label.textContent.toUpperCase().includes(name)
+    ) {
+      const status = row.querySelector("b");
 
-      if (status) status.textContent = value;
+      if (status) {
+        status.textContent =
+          (value === "ONLINE" || value === "READY")
+            ? "● " + value
+            : "○ " + value;
+
+        status.className =
+          (value === "ONLINE" || value === "READY")
+            ? "on"
+            : "off";
+      }
     }
   });
 }
@@ -153,17 +272,8 @@ function addMessage(sender, message) {
   }
 
   const wrapper = document.createElement("div");
-
-  wrapper.style.cssText = `
-    padding:10px;
-    margin:8px 0;
-    border-left:3px solid #00ffff;
-    background:rgba(0,255,255,0.06);
-    color:#70ffff;
-    white-space:pre-wrap;
-    overflow-wrap:anywhere;
-    font-family:inherit;
-  `;
+  wrapper.className = "msg" +
+    (sender === "YOU" ? " user" : "");
 
   const heading = document.createElement("strong");
   heading.textContent = sender + ": ";
@@ -194,16 +304,15 @@ function speak(text) {
 }
 
 // 8. GEMINI API
-async function askGemini(prompt, imageData = null) {
+async function askGemini(promptText, imageData = null) {
   if (!API_KEY) {
-    throw new Error("Gemini API key is missing");
+    throw new Error("Gemini API key is missing.");
   }
 
-  if (!activeModel) {
-    await discoverModels();
-  }
+  // Discover models only when the first message is sent.
+  const models = await discoverModels();
 
-  const parts = [{ text: prompt }];
+  const parts = [{ text: promptText }];
 
   if (imageData) {
     parts.push({
@@ -222,14 +331,9 @@ async function askGemini(prompt, imageData = null) {
     }
   ];
 
-  const modelsToTry = [
-    activeModel,
-    ...MODELS.filter(m => m !== activeModel)
-  ];
-
   let lastError;
 
-  for (const model of modelsToTry) {
+  for (const model of models) {
     try {
       const response = await fetch(
         `${API_BASE}/models/${model}:generateContent?key=${encodeURIComponent(API_KEY)}`,
@@ -238,14 +342,15 @@ async function askGemini(prompt, imageData = null) {
           headers: {
             "Content-Type": "application/json"
           },
+          signal: AbortSignal.timeout(30000),
           body: JSON.stringify({
             system_instruction: {
               parts: [{
                 text: `You are J.A.R.V.I.S., an intelligent mobile AI assistant.
-You are helpful, professional, friendly and concise.
 Your name is JARVIS.
+Be helpful, professional, friendly and concise.
 Respond naturally and clearly.
-You can analyze images when provided.
+Analyze images when provided.
 Never claim to perform actions you cannot actually perform.`
               }]
             },
@@ -261,45 +366,66 @@ Never claim to perform actions you cannot actually perform.`
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(
+        const error = new Error(
           result.error?.message || `HTTP ${response.status}`
         );
+
+        error.status = response.status;
+        throw error;
       }
 
-      const answer =
-        result.candidates?.[0]?.content?.parts
-          ?.map(p => p.text || "")
-          .join("")
-          .trim();
+      const answer = result.candidates?.[0]?.content?.parts
+        ?.map(p => p.text || "")
+        .join("")
+        .trim();
 
       if (!answer) {
-        throw new Error("Gemini returned an empty response");
+        throw new Error("Gemini returned an empty response.");
       }
 
       activeModel = model;
 
+      // Never store image base64 in browser memory.
       history.push(
-        { role: "user", parts },
-        { role: "model", parts: [{ text: answer }] }
+        {
+          role: "user",
+          parts: [{
+            text: imageData
+              ? promptText + " [Image attached]"
+              : promptText
+          }]
+        },
+        {
+          role: "model",
+          parts: [{ text: answer }]
+        }
       );
 
       history = history.slice(-12);
       saveMemory();
 
+      console.log("JARVIS active model:", activeModel);
+
       return answer;
 
     } catch (error) {
-      console.error(model, error);
+      console.error("Model failed:", model, error);
       lastError = error;
 
-      // Don't retry authentication or permission errors.
-      if (/API_KEY_INVALID|PERMISSION_DENIED|API key/i.test(error.message)) {
+      // Don't retry invalid keys or permission errors.
+      if (
+        error.status === 401 ||
+        error.status === 403 ||
+        /API_KEY_INVALID|API key not valid/i.test(error.message)
+      ) {
         throw error;
       }
+
+      // Try the next supported Flash model.
     }
   }
 
-  throw lastError || new Error("All Gemini models failed");
+  throw lastError || new Error("All available Flash models failed.");
 }
 
 // 9. COMMAND SYSTEM
@@ -319,7 +445,12 @@ function handleCommand(text) {
     if (newKey && newKey.trim()) {
       API_KEY = newKey.trim();
       localStorage.setItem("jarvis_key", API_KEY);
+
       activeModel = null;
+      availableModels = [];
+
+      localStorage.removeItem(CACHE_KEY);
+
       addMessage("JARVIS", "API key updated.");
     }
 
@@ -332,6 +463,7 @@ function handleCommand(text) {
       encodeURIComponent(text.slice(7)),
       "_blank"
     );
+
     addMessage("JARVIS", "Opening Google search.");
     return true;
   }
@@ -342,21 +474,32 @@ function handleCommand(text) {
       encodeURIComponent(text.slice(8)),
       "_blank"
     );
+
     addMessage("JARVIS", "Opening YouTube.");
     return true;
   }
 
-  if (command === "time" || command === "what time is it") {
+  if (
+    command === "time" ||
+    command === "what time is it"
+  ) {
     const answer = new Date().toLocaleTimeString();
+
     addMessage("JARVIS", "Current time: " + answer);
     speak("The current time is " + answer);
+
     return true;
   }
 
-  if (command === "date" || command === "today's date") {
+  if (
+    command === "date" ||
+    command === "today's date"
+  ) {
     const answer = new Date().toLocaleDateString();
+
     addMessage("JARVIS", "Today's date: " + answer);
     speak("Today's date is " + answer);
+
     return true;
   }
 
@@ -371,7 +514,7 @@ async function sendMessage(customText = null, imageData = null) {
 
   const message = (
     customText !== null ? customText : input?.value
-  )?.trim();
+  )?.trim() || "";
 
   if (!message && !imageData) return;
 
@@ -381,21 +524,29 @@ async function sendMessage(customText = null, imageData = null) {
   }
 
   if (!imageData && handleCommand(message)) {
-    if (input && customText === null) input.value = "";
+    if (input && customText === null) {
+      input.value = "";
+    }
     return;
   }
 
-  if (input && customText === null) input.value = "";
+  if (input && customText === null) {
+    input.value = "";
+  }
 
   addMessage("YOU", message || "Analyze this image.");
 
   busy = true;
+
   if (sendButton) sendButton.disabled = true;
 
   setStatus("AI", "PROCESSING");
 
   try {
-    const answer = await askGemini(message || "Describe this image.", imageData);
+    const answer = await askGemini(
+      message || "Describe this image.",
+      imageData
+    );
 
     addMessage("JARVIS", answer);
     speak(answer);
@@ -405,22 +556,24 @@ async function sendMessage(customText = null, imageData = null) {
   } catch (error) {
     console.error("JARVIS ERROR:", error);
 
-    addMessage(
-      "JARVIS",
-      "ERROR: " + error.message
-    );
+    addMessage("JARVIS", "ERROR: " + error.message);
 
     setStatus("AI", "ERROR");
 
   } finally {
     busy = false;
-    if (sendButton) sendButton.disabled = false;
+
+    if (sendButton) {
+      sendButton.disabled = false;
+    }
   }
 }
 
 // 11. SEND BUTTON
 if (sendButton) {
-  sendButton.addEventListener("click", () => sendMessage());
+  sendButton.addEventListener("click", () => {
+    sendMessage();
+  });
 }
 
 if (input) {
@@ -440,7 +593,10 @@ const SpeechRecognition =
 if (micButton) {
   micButton.addEventListener("click", () => {
     if (!SpeechRecognition) {
-      addMessage("JARVIS", "Speech recognition is not supported in this browser.");
+      addMessage(
+        "JARVIS",
+        "Speech recognition is not supported in this browser."
+      );
       return;
     }
 
@@ -460,6 +616,7 @@ if (micButton) {
         event.results[0][0].transcript;
 
       if (input) input.value = spokenText;
+
       sendMessage(spokenText);
     };
 
@@ -476,56 +633,56 @@ if (micButton) {
 }
 
 // 13. CAMERA / IMAGE ANALYSIS
-const imageInput = document.createElement("input");
-
-imageInput.type = "file";
-imageInput.accept = "image/*";
-imageInput.capture = "environment";
-imageInput.hidden = true;
-
-document.body.appendChild(imageInput);
-
-if (cameraButton) {
+if (cameraButton && imageInput) {
   cameraButton.addEventListener("click", () => {
     imageInput.click();
   });
 }
 
-imageInput.addEventListener("change", async () => {
-  const file = imageInput.files?.[0];
+if (imageInput) {
+  imageInput.addEventListener("change", async () => {
+    const file = imageInput.files?.[0];
 
-  if (!file) return;
+    if (!file) return;
 
-  if (!file.type.startsWith("image/")) {
-    addMessage("JARVIS", "Please select an image.");
-    return;
-  }
+    if (!file.type.startsWith("image/")) {
+      addMessage("JARVIS", "Please select an image.");
+      imageInput.value = "";
+      return;
+    }
 
-  try {
-    const data = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
+    try {
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
 
-      reader.onload = () => {
-        const base64 = reader.result.split(",")[1];
+        reader.onload = () => {
+          const base64 = reader.result.split(",")[1];
 
-        resolve({
-          type: file.type,
-          data: base64
-        });
-      };
+          resolve({
+            type: file.type,
+            data: base64
+          });
+        };
 
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
+        reader.onerror = () => {
+          reject(new Error("Could not read the image."));
+        };
 
-    await sendMessage("Analyze this image and describe what you see.", data);
+        reader.readAsDataURL(file);
+      });
 
-  } catch (error) {
-    addMessage("JARVIS", "Image error: " + error.message);
-  }
+      await sendMessage(
+        "Analyze this image and describe what you see.",
+        data
+      );
 
-  imageInput.value = "";
-});
+    } catch (error) {
+      addMessage("JARVIS", "Image error: " + error.message);
+    }
+
+    imageInput.value = "";
+  });
+}
 
 // 14. CLEAR MEMORY BUTTON
 if (clearButton) {
@@ -534,19 +691,27 @@ if (clearButton) {
       history = [];
       saveMemory();
 
-      if (chatBox) chatBox.innerHTML = "";
+      if (chatBox) {
+        chatBox.innerHTML = "";
+      }
 
       addMessage("JARVIS", "Memory cleared.");
     }
   });
 }
 
-// 15. INITIALIZATION
-async function initializeJarvis() {
-  addMessage("JARVIS", "J.A.R.V.I.S. SYSTEM INITIALIZING...");
+// 15. FAST INITIALIZATION
+function initializeJarvis() {
+  setStatus(
+    "NETWORK",
+    navigator.onLine ? "ONLINE" : "OFFLINE"
+  );
 
-  setStatus("NETWORK", navigator.onLine ? "ONLINE" : "OFFLINE");
-  setStatus("VOICE", SpeechRecognition ? "READY" : "UNAVAILABLE");
+  setStatus(
+    "VOICE",
+    SpeechRecognition ? "READY" : "UNAVAILABLE"
+  );
+
   setStatus("MEMORY", "ACTIVE");
 
   window.addEventListener("online", () => {
@@ -558,24 +723,20 @@ async function initializeJarvis() {
   });
 
   if (!API_KEY) {
-    addMessage("JARVIS", "API key missing. Reload and enter your Gemini API key.");
+    addMessage(
+      "JARVIS",
+      "API key missing. Reload and enter your Gemini API key."
+    );
     return;
   }
 
-  try {
-    await discoverModels();
+  // No model discovery or Google API request at startup.
+  setStatus("AI", "ONLINE");
 
-    addMessage(
-      "JARVIS",
-      "All systems initialized. " +
-      "Model: " + activeModel +
-      ". At your service."
-    );
-
-  } catch (error) {
-    addMessage("JARVIS", "INITIALIZATION ERROR: " + error.message);
-  }
+  addMessage(
+    "JARVIS",
+    "J.A.R.V.I.S CORE ONLINE. Ready for your command."
+  );
 }
 
 initializeJarvis();
-  
