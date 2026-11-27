@@ -601,9 +601,6 @@ if (input) {
     }
   });
 }
-
-// 12. MICROPHONE
-
 // 12. MICROPHONE - ANDROID NATIVE + WEB FALLBACK
 
 window.onAndroidSpeechResult = function(spokenText) {
