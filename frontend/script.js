@@ -601,8 +601,12 @@ if (input) {
     }
   });
 }
-// 12. MICROPHONE - ANDROID NATIVE + WEB FALLBACK
+// SPEECH RECOGNITION
+const SpeechRecognition =
+  window.SpeechRecognition ||
+  window.webkitSpeechRecognition;
 
+// 12. MICROPHONE - ANDROID NATIVE + WEB FALLBACK
 window.onAndroidSpeechResult = function(spokenText) {
   if (!spokenText) return;
 
