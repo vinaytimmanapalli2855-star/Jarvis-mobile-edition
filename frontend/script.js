@@ -606,78 +606,70 @@ const SpeechRecognition =
   window.SpeechRecognition ||
   window.webkitSpeechRecognition;
 
-// 12. MICROPHONE - ANDROID NATIVE + WEB FALLBACK
+
+// 12. CONTINUOUS VOICE CONVERSATION
+
+let continuousVoiceMode = false;
+
+function startJarvisListening() {
+  if (!continuousVoiceMode || busy) return;
+
+  if (
+    window.AndroidJarvis &&
+    typeof window.AndroidJarvis.startListening === "function"
+  ) {
+    setStatus("VOICE", "LISTENING");
+    window.AndroidJarvis.startListening();
+  }
+}
+
 window.onAndroidSpeechResult = function(spokenText) {
   if (!spokenText) return;
 
-  if (input) {
-    input.value = spokenText;
+  const command = spokenText.toLowerCase().trim();
+
+  if (
+    command === "stop listening" ||
+    command === "stop conversation"
+  ) {
+    continuousVoiceMode = false;
+    setStatus("VOICE", "READY");
+    addMessage("JARVIS", "Continuous listening stopped.");
+    return;
   }
 
-  setStatus("VOICE", "READY");
+  if (input) input.value = spokenText;
+
+  setStatus("VOICE", "PROCESSING");
   sendMessage(spokenText);
 };
 
 window.onAndroidSpeechError = function(message) {
   addMessage("JARVIS", "Voice error: " + message);
   setStatus("VOICE", "ERROR");
+  continuousVoiceMode = false;
+};
+
+window.onAndroidSpeechFinished = function() {
+  if (continuousVoiceMode) {
+    startJarvisListening();
+  }
 };
 
 if (micButton) {
   micButton.addEventListener("click", () => {
+    continuousVoiceMode = !continuousVoiceMode;
 
-    // Use native Android speech recognition in the APK.
-    if (
-      window.AndroidJarvis &&
-      typeof window.AndroidJarvis.startListening === "function"
-    ) {
-      addMessage("JARVIS", "Listening...");
-      setStatus("VOICE", "LISTENING");
-
-      window.AndroidJarvis.startListening();
-      return;
-    }
-
-    // Browser fallback.
-    if (!SpeechRecognition) {
-      addMessage(
-        "JARVIS",
-        "Speech recognition is not supported."
-      );
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-
-    recognition.lang = "en-IN";
-    recognition.continuous = false;
-    recognition.interimResults = false;
-
-    recognition.onstart = () => {
-      addMessage("JARVIS", "Listening...");
-      setStatus("VOICE", "LISTENING");
-    };
-
-    recognition.onresult = event => {
-      const spokenText = event.results[0][0].transcript;
-
-      if (input) input.value = spokenText;
-
-      sendMessage(spokenText);
-    };
-
-    recognition.onerror = event => {
-      addMessage("JARVIS", "Voice error: " + event.error);
-      setStatus("VOICE", "ERROR");
-    };
-
-    recognition.onend = () => {
+    if (continuousVoiceMode) {
+      addMessage("JARVIS", "Continuous voice mode activated.");
+      startJarvisListening();
+    } else {
       setStatus("VOICE", "READY");
-    };
-
-    recognition.start();
+      addMessage("JARVIS", "Continuous voice mode stopped.");
+    }
   });
 }
+
 
 
 // 13. CAMERA / IMAGE ANALYSIS
