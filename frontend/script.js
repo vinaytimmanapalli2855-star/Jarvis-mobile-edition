@@ -603,16 +603,45 @@ if (input) {
 }
 
 // 12. MICROPHONE
-const SpeechRecognition =
-  window.SpeechRecognition ||
-  window.webkitSpeechRecognition;
+
+// 12. MICROPHONE - ANDROID NATIVE + WEB FALLBACK
+
+window.onAndroidSpeechResult = function(spokenText) {
+  if (!spokenText) return;
+
+  if (input) {
+    input.value = spokenText;
+  }
+
+  setStatus("VOICE", "READY");
+  sendMessage(spokenText);
+};
+
+window.onAndroidSpeechError = function(message) {
+  addMessage("JARVIS", "Voice error: " + message);
+  setStatus("VOICE", "ERROR");
+};
 
 if (micButton) {
   micButton.addEventListener("click", () => {
+
+    // Use native Android speech recognition in the APK.
+    if (
+      window.AndroidJarvis &&
+      typeof window.AndroidJarvis.startListening === "function"
+    ) {
+      addMessage("JARVIS", "Listening...");
+      setStatus("VOICE", "LISTENING");
+
+      window.AndroidJarvis.startListening();
+      return;
+    }
+
+    // Browser fallback.
     if (!SpeechRecognition) {
       addMessage(
         "JARVIS",
-        "Speech recognition is not supported in this browser."
+        "Speech recognition is not supported."
       );
       return;
     }
@@ -629,8 +658,7 @@ if (micButton) {
     };
 
     recognition.onresult = event => {
-      const spokenText =
-        event.results[0][0].transcript;
+      const spokenText = event.results[0][0].transcript;
 
       if (input) input.value = spokenText;
 
@@ -639,6 +667,7 @@ if (micButton) {
 
     recognition.onerror = event => {
       addMessage("JARVIS", "Voice error: " + event.error);
+      setStatus("VOICE", "ERROR");
     };
 
     recognition.onend = () => {
@@ -648,6 +677,7 @@ if (micButton) {
     recognition.start();
   });
 }
+
 
 // 13. CAMERA / IMAGE ANALYSIS
 if (cameraButton && imageInput) {
