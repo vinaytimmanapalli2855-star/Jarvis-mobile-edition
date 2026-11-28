@@ -1,4 +1,4 @@
-
+y
 /* ==========================================
        J.A.R.V.I.S MOBILE EDITION
           OPTIMIZED AI ENGINE
@@ -780,3 +780,13 @@ function initializeJarvis() {
 }
 
 initializeJarvis();
+
+// JARVIS WHATSAPP NOTIFICATION TEST
+
+window.onWhatsAppMessageReceived = function(sender, message) {
+    addMessage(
+        "JARVIS",
+        "WhatsApp message from " + sender + ": " + message
+    );
+};
+
